@@ -1,5 +1,7 @@
 # Python Cheatsheet
 
+> Targets **CPython 3.9+**; newer-version features are gated inline (e.g. `3.10+`). Current stable is 3.13/3.14 — everything here is forward-compatible.
+
 ---
 
 ## Numeric Types & Operators
@@ -79,6 +81,13 @@ name = 'Ada'
 f'Hello {name}'                     # f-string (preferred)
 'Hello {}'.format(name)             # .format()
 'Hello %s' % name                   # % formatting
+
+# Alignment & padding (width-based)
+'hi'.ljust(10, '-')     # 'hi--------'   left-justify in width 10, pad with '-'
+'hi'.rjust(10, '-')     # '--------hi'   right-justify
+'hi'.center(10, '-')    # '----hi----'   center
+'hi'.center(11, '*')    # '****hi*****'  extra pad goes to the right
+'42'.zfill(5)           # '00042'        zero-pad numbers (keeps leading sign)
 ```
 
 ---
@@ -1133,4 +1142,311 @@ class Item:
 
 items = [Item(3, 'low'), Item(1, 'high'), Item(2, 'mid')]
 sorted(items)   # sorted by priority first
+```
+
+---
+
+## `textwrap` Module
+
+```python
+import textwrap
+
+text = 'The quick brown fox jumps over the lazy dog'
+
+# fill: wrap text to a max width, return one string with newlines
+textwrap.fill(text, width=15)
+# 'The quick brown\nfox jumps over\nthe lazy dog'
+
+# wrap: same, but returns a list of lines instead
+textwrap.wrap(text, width=15)
+# ['The quick brown', 'fox jumps over', 'the lazy dog']
+
+# shorten: truncate to width, adding a placeholder
+textwrap.shorten(text, width=20)          # 'The quick brown [...]'
+
+# dedent: strip common leading whitespace (great for multi-line strings)
+textwrap.dedent('''
+    line 1
+    line 2
+''')                                      # removes the shared indent
+
+# indent: add a prefix to every line
+textwrap.indent('a\nb', '> ')             # '> a\n> b'
+
+# Classic one-liner (HackerRank "Text Wrap")
+def wrap(string, max_width):
+    return textwrap.fill(string, max_width)
+```
+
+---
+
+## Format Spec Mini-Language
+
+The `:` inside an f-string / `format()` controls width, alignment, sign, and precision — `{value:[fill][align][sign][width][,][.precision][type]}`.
+
+```python
+n = 42
+pi = 3.14159
+
+# Alignment & width  (< left, > right, ^ center)
+f'{n:>6}'      # '    42'   right-align in width 6
+f'{n:<6}'      # '42    '   left-align
+f'{n:^6}'      # '  42  '   center
+f'{n:*^6}'     # '**42**'   center, fill with '*'
+f'{n:06}'      # '000042'   zero-pad
+
+# Numbers
+f'{pi:.2f}'    # '3.14'     2 decimal places
+f'{pi:8.2f}'   # '    3.14' width 8, 2 decimals
+f'{1234567:,}' # '1,234,567' thousands separator
+f'{0.256:.1%}' # '25.6%'    percentage
+f'{255:x}'     # 'ff'       hex   (b=binary, o=octal, X=upper hex)
+f'{n:+}'       # '+42'      always show sign
+
+# Debugging (3.8+): show the expression AND its value
+f'{n=}'        # 'n=42'
+```
+
+---
+
+## Walrus Operator `:=` (3.8+)
+
+Assign a value *and* use it in the same expression — avoids computing/reading something twice.
+
+```python
+# Assign inside a condition
+if (n := len(data)) > 10:
+    print(f'{n} items — too many')
+
+# Read until a sentinel, no duplicate call
+while (line := input()) != 'quit':
+    print(line)
+
+# Filter + reuse the computed value in a comprehension
+results = [y for x in data if (y := f(x)) is not None]
+```
+
+---
+
+## Structural Pattern Matching — `match` (3.10+)
+
+```python
+def handle(command):
+    match command.split():
+        case ['go', direction]:                 # bind the second word
+            return f'moving {direction}'
+        case ['drop', *items]:                   # capture the rest into a list
+            return f'dropping {items}'
+        case ['quit' | 'exit']:                  # OR pattern
+            return 'bye'
+        case _:                                  # wildcard (default)
+            return 'unknown'
+
+# Match on structure / types
+match point:
+    case (0, 0):                 print('origin')
+    case (x, 0):                 print(f'on x-axis at {x}')
+    case (x, y) if x == y:       print('diagonal')          # guard clause
+    case {'name': n, 'age': a}:  print(f'{n} is {a}')       # dict pattern
+    case Point(x=px, y=py):      print(f'Point {px},{py}')  # class pattern
+```
+
+---
+
+## Context Managers (`with`)
+
+```python
+# The `with` statement guarantees setup/teardown even if an error occurs.
+# Any object implementing __enter__ / __exit__ works.
+import time
+
+class Timer:
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+    def __exit__(self, exc_type, exc_val, tb):
+        print(f'took {time.perf_counter() - self.start:.3f}s')
+        # return True to suppress the exception; falsy re-raises it
+
+with Timer():
+    do_work()
+
+# contextlib.contextmanager — build one from a generator (less boilerplate)
+from contextlib import contextmanager
+
+@contextmanager
+def open_db():
+    conn = connect()
+    try:
+        yield conn          # everything before yield = setup, after = teardown
+    finally:
+        conn.close()
+
+with open_db() as conn:
+    conn.query(...)
+
+# Manage multiple resources in one line
+with open('a.txt') as fa, open('b.txt', 'w') as fb:
+    fb.write(fa.read())
+
+# suppress: ignore specific exceptions without try/except
+from contextlib import suppress
+with suppress(FileNotFoundError):
+    os.remove('maybe.txt')
+```
+
+---
+
+## `functools` Module
+
+```python
+from functools import lru_cache, cache, partial, reduce, wraps
+
+# --- lru_cache / cache: memoize a function's results ---
+@lru_cache(maxsize=None)          # @cache is the 3.9+ shorthand for maxsize=None
+def fib(n):
+    return n if n < 2 else fib(n-1) + fib(n-2)
+fib(100)                          # fast — subresults cached
+fib.cache_info()                  # hits/misses stats
+
+# --- partial: pre-fill some arguments, get a new callable ---
+def power(base, exp): return base ** exp
+square = partial(power, exp=2)
+square(5)                         # 25
+
+# --- reduce: fold an iterable to a single value ---
+reduce(lambda a, b: a * b, [1, 2, 3, 4])   # 24
+
+# --- wraps: preserve name/docstring when writing decorators ---
+def log(f):
+    @wraps(f)                     # without this, wrapper.__name__ becomes 'wrapper'
+    def wrapper(*a, **k):
+        return f(*a, **k)
+    return wrapper
+```
+
+---
+
+## `re` — Regular Expressions
+
+```python
+import re
+
+text = 'Contact: ada@mail.com, alan@dev.io'
+
+re.search(r'\d+', 'abc123')          # first match object (.group() → '123'), else None
+re.match(r'\d+', '123abc')           # match only at the START of the string
+re.findall(r'\w+@\w+\.\w+', text)    # ['ada@mail.com', 'alan@dev.io']  (list of all)
+re.sub(r'\s+', '_', 'a  b   c')      # 'a_b_c'  (replace)
+re.split(r'[,;]\s*', 'a, b; c')      # ['a', 'b', 'c']
+
+# Groups & named groups
+m = re.search(r'(\w+)@(\w+)', 'ada@mail')
+m.group(0), m.group(1), m.group(2)   # ('ada@mail', 'ada', 'mail')
+
+m = re.search(r'(?P<user>\w+)@(?P<host>\w+)', 'ada@mail')
+m.group('user')                      # 'ada'
+
+# Compile once, reuse many times (faster in loops)
+pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
+pattern.findall(log_text)
+
+# Common tokens: \d digit  \w word char  \s whitespace  .  any
+#   + 1-or-more  * 0-or-more  ? optional  {n,m} range  ^ start  $ end
+```
+
+---
+
+## `pathlib` — Modern File Paths
+
+```python
+from pathlib import Path
+
+p = Path('data') / 'raw' / 'file.csv'   # '/' joins paths cross-platform
+
+p.name          # 'file.csv'
+p.stem          # 'file'
+p.suffix        # '.csv'
+p.parent        # Path('data/raw')
+p.exists()      # bool
+p.is_file()     # bool
+p.is_dir()      # bool
+
+Path('out').mkdir(parents=True, exist_ok=True)   # create dirs, no error if present
+p.read_text()                                     # read whole file as str
+p.write_text('hello')                             # write str to file
+
+# Globbing
+list(Path('.').glob('*.py'))            # files in this dir
+list(Path('.').rglob('*.csv'))          # recursive search
+```
+
+---
+
+## `enum` — Enumerations
+
+```python
+from enum import Enum, auto
+
+class Color(Enum):
+    RED   = 1
+    GREEN = 2
+    BLUE  = auto()          # auto-assigns 3
+
+Color.RED           # <Color.RED: 1>
+Color.RED.name      # 'RED'
+Color.RED.value     # 1
+Color(1)            # <Color.RED: 1>  — look up by value
+Color['RED']        # <Color.RED: 1>  — look up by name
+list(Color)         # [<Color.RED: 1>, <Color.GREEN: 2>, <Color.BLUE: 3>]
+
+# IntEnum compares to ints; StrEnum (3.11+) compares to strings
+```
+
+---
+
+## `heapq` & `bisect`
+
+```python
+import heapq, bisect
+
+# --- heapq: min-heap (smallest pops first) ---
+h = [3, 1, 4, 1, 5]
+heapq.heapify(h)              # rearrange list into a heap, O(n)
+heapq.heappush(h, 2)
+heapq.heappop(h)             # 1  (always the smallest)
+heapq.nsmallest(3, h)        # 3 smallest
+heapq.nlargest(3, h)         # 3 largest
+# Max-heap trick: push negated values
+
+# --- bisect: binary search on a SORTED list ---
+arr = [1, 3, 5, 7, 9]
+bisect.bisect_left(arr, 5)   # 2  (leftmost insert position)
+bisect.insort(arr, 4)        # insert keeping sorted → [1, 3, 4, 5, 7, 9]
+```
+
+---
+
+## Sorting with Keys & `operator`
+
+```python
+from operator import itemgetter, attrgetter
+
+people = [('Ada', 30), ('Bob', 25), ('Cara', 30)]
+
+# key= controls what to sort by
+sorted(people, key=lambda p: p[1])              # by age
+sorted(people, key=itemgetter(1))               # same, faster/clearer
+sorted(people, key=itemgetter(1, 0))            # by age, then name (tie-break)
+sorted(people, key=lambda p: (-p[1], p[0]))     # age DESC, name ASC
+
+# Sort objects by attribute
+sorted(cars, key=attrgetter('speed'), reverse=True)
+
+# max/min accept key= too
+max(people, key=itemgetter(1))                  # ('Ada', 30) — first max
+
+# Transpose rows <-> columns with zip(*)
+rows = [(1, 2, 3), (4, 5, 6)]
+list(zip(*rows))                                # [(1, 4), (2, 5), (3, 6)]
 ```

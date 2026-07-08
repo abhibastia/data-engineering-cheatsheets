@@ -42,6 +42,37 @@
 
 ---
 
+## Dashboards
+
+- Central visual panel across services (Glue, Lambda, Step Functions, DynamoDB) in one place
+- Widget types: Line, Number, Stacked area, etc.
+- Add Glue job metrics from **AWS/Glue → Job metrics → <job name>**: `JobRunsSucceeded`, `JobRunsFailed`, `JobRunsStarted`
+- Other useful namespaces: `AWS/Lambda` (by function), `States` (Step Functions), `AWS/DynamoDB` (table metrics)
+- ⚠️ Glue must run **≥ ~30s** to emit metrics; enable Glue observability metrics for detail
+- First 3 dashboards free, then ~$3/dashboard/month
+
+---
+
+## Alarms — Glue Job Failure Example
+
+1. Alarms → Create alarm → **Select metric** → `AWS/Glue → Job metrics → <job> → JobRunsFailed`
+2. Statistic **Sum**, Period **5 min**, threshold **>= 1**
+3. Action: **Create SNS topic** (e.g. `GlueJobFailureAlert`) → add email → **confirm the subscription email**
+4. Create alarm — you'll now be emailed on any failed run
+
+- 🔧 Alarm on `Lambda Errors >= 1` and `JobRunsFailed >= 1` to catch silent pipeline failures
+
+---
+
+## Billing Alarm
+
+- Billing metric `EstimatedCharges` is **only in us-east-1**
+1. Billing & Cost Management → Preferences → enable **Receive CloudWatch billing alerts**
+2. Switch CloudWatch region to **US East (N. Virginia)**
+3. Create alarm → **Billing → Total Estimated Charge → EstimatedCharges (USD)** → threshold e.g. `> 10 USD` → SNS notify
+
+---
+
 ## CLI
 
 ```bash

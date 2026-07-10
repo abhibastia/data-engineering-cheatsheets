@@ -4,6 +4,23 @@ Apache Spark is a distributed, in-memory data processing engine. Unlike Pandas (
 
 > **Version baseline:** examples target **Spark 3.5** (LTS, security fixes to Nov 2027) — the runtime used by AWS Glue 5.0. Spark **4.x** is the current release line; the DataFrame/SQL APIs shown here carry forward unchanged. Version gates are noted inline (e.g. `3.4+`).
 
+## Contents
+
+1. [Core Concepts](#core-concepts)
+2. [Architecture](#architecture)
+3. [Setup with Docker and Jupyter](#setup-with-docker-and-jupyter)
+4. [Entry Points](#entry-points)
+5. [RDD API](#rdd-api)
+6. [DataFrame API](#dataframe-api)
+7. [Spark SQL](#spark-sql) — joins, join strategies, window functions
+8. [ETL Pattern](#etl-pattern-extract-transform-load)
+9. [More Column and DataFrame Ops](#more-column-and-dataframe-ops)
+10. [UDFs](#udfs)
+11. [Spark Connect](#spark-connect-introduced-34)
+12. [Reading Query Plans (`explain`)](#reading-query-plans-explain)
+13. [Performance and Caching](#performance-and-caching)
+14. [When to Use What](#when-to-use-what)
+
 ## Core Concepts
 
 | Concept | What it is |
@@ -50,7 +67,7 @@ Results collected by Driver
 
 ---
 
-## Setup (Docker + Jupyter)
+## Setup with Docker and Jupyter
 
 ```bash
 # jupyter/pyspark-notebook image — Spark + PySpark preinstalled
@@ -245,6 +262,46 @@ df.filter(df.age > 25).select("name", "salary").show()
 df.transform(lambda d: d.filter(d.age > 25)).transform(lambda d: d.dropDuplicates())
 ```
 
+#### `select` vs `withColumn`
+
+Both add/derive columns and both are lazy transformations producing the same optimized plan for equivalent output — the difference is **shape** and **scale**.
+
+| | `select` / `selectExpr` | `withColumn` |
+|---|---|---|
+| Output columns | Exactly what you list (a projection) | All existing columns **+** the new/replaced one |
+| Adds many cols | One call, list them all | One call **per** column |
+| Drops/reorders | Yes — you choose the full set | No — keeps everything |
+| Replace a column | List it with the new expr | `withColumn("x", ...)` with the same name |
+
+```python
+# Same result, two styles:
+df.withColumn("bonus", F.col("salary") * 0.1)                 # keep all cols + bonus
+df.select("*", (F.col("salary") * 0.1).alias("bonus"))       # explicit equivalent
+
+# Adding several derived columns — select does it in ONE projection:
+df.select(
+    "id", "name",
+    (F.col("salary") * 12).alias("annual"),
+    F.upper("dept").alias("dept"),
+)
+# vs. chaining withColumn (readable, but see the gotcha below):
+(df.withColumn("annual", F.col("salary") * 12)
+   .withColumn("dept", F.upper("dept")))
+```
+
+**The gotcha:** each `withColumn` wraps the plan in another `Project` node. Chaining **hundreds** of them (e.g. in a loop) builds a deeply nested logical plan that makes Catalyst analysis slow — and can blow the stack. For many columns, use a single `select`/`withColumns` (3.3+) instead of a long `withColumn` chain.
+
+```python
+# BAD at scale — N nested projections
+for c in many_cols:
+    df = df.withColumn(c, F.col(c).cast("double"))
+
+# GOOD — one projection
+df = df.select(*[F.col(c).cast("double").alias(c) if c in many_cols else c
+                 for c in df.columns])
+# or (Spark 3.3+): df = df.withColumns({c: F.col(c).cast("double") for c in many_cols})
+```
+
 ### Aggregate (KPIs)
 ```python
 from pyspark.sql import functions as F
@@ -326,6 +383,50 @@ spark.sql("""
 | `semi` | Left rows that HAVE a match (left columns only). |
 | `anti` | Left rows that have NO match. |
 
+Aliases Spark accepts for the `how` argument: `inner`; `left`/`left_outer`; `right`/`right_outer`; `outer`/`full`/`fullouter`/`full_outer`; `cross`; `leftsemi`/`semi`; `leftanti`/`anti`.
+
+**Join gotchas**
+```python
+# Ambiguous columns after a join on a condition (both sides keep their key col).
+# Join on a STRING key name instead — Spark keeps a single merged key column:
+df.join(other, "id", "inner")                    # one `id` column in the result
+df.join(other, ["id", "region"], "inner")        # multi-column equi-join, merged
+
+# Null keys never match in an equi-join (SQL semantics). Use eqNullSafe for null==null:
+df.join(other, df.k.eqNullSafe(other.k))         # <=> operator
+
+# Duplicate rows explode a join — dedupe/aggregate the smaller side first.
+```
+
+### Join Strategies (physical join algorithms)
+
+The join *type* (inner/left/…) is **what** to return; the join *strategy* is **how** Spark computes it. Catalyst (+ AQE) picks one based on table sizes, join keys, and hints. Read it off `df.explain()`.
+
+| Strategy | When Spark picks it | Cost | Notes |
+|---|---|---|---|
+| **Broadcast Hash Join (BHJ)** | One side ≤ `autoBroadcastJoinThreshold` (default **10 MB**), equi-join. | Cheapest — **no shuffle**. | Small side is broadcast to every executor, built into a hash table. AQE can trigger it at runtime once it knows real sizes. |
+| **Shuffle Sort-Merge Join (SMJ)** | Both sides large, equi-join on sortable keys. **Default** for big-vs-big. | Shuffles + sorts both sides. | Robust and memory-stable; the workhorse for large joins. |
+| **Shuffle Hash Join (SHJ)** | One side fits in memory per partition after shuffle, equi-join. | Shuffles both; builds a hash table (no sort). | Off by default vs SMJ unless `spark.sql.join.preferSortMergeJoin=false`. Can OOM if the build side is underestimated. |
+| **Broadcast Nested Loop Join (BNLJ)** | Non-equi joins (`<`, `>`, `between`) or no join key, with one small side. | O(n·m) but broadcasts the small side. | Fallback for range/inequality joins. |
+| **Cartesian (Shuffle-Replicate NL)** | Cross join / non-equi with no broadcastable side. | O(n·m), fully shuffled. | Almost always a mistake on big data — check for a missing join key. |
+
+```python
+# Force a strategy with a hint (overrides the optimizer). SQL names in the hint:
+#   BROADCAST | MERGE | SHUFFLE_HASH | SHUFFLE_REPLICATE_NL
+from pyspark.sql.functions import broadcast
+big.join(broadcast(small), "key")                        # force BHJ (DataFrame API)
+
+df.hint("broadcast").join(other, "key")                  # hint form
+spark.sql("SELECT /*+ BROADCAST(d) */ * FROM emp e JOIN dept d ON e.dept_id = d.id")
+spark.sql("SELECT /*+ MERGE(a, b) */ * FROM a JOIN b ON a.k = b.k")   # force SMJ
+
+# Broadcast threshold — raise to broadcast bigger dims, set -1 to disable BHJ:
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", 50 * 1024 * 1024)   # 50 MB
+```
+
+- **Only equi-joins** (`=` / `eqNullSafe`) can use BHJ, SMJ, or SHJ. Any inequality falls back to BNLJ or Cartesian — expensive.
+- Broadcasting a side that's *not* actually small risks a driver/executor OOM. Trust AQE's runtime sizing over a hardcoded `broadcast()` when the size is uncertain.
+
 ### Window Functions
 Row-wise calculations across partitions **without collapsing rows** (unlike `groupBy`).
 
@@ -348,7 +449,7 @@ Common window functions: `RANK(), DENSE_RANK(), ROW_NUMBER(), LAG(), LEAD(), SUM
 
 ---
 
-## ETL Pattern (Extract → Transform → Load)
+## ETL Pattern (Extract, Transform, Load)
 
 ```python
 from pyspark.sql import SparkSession, functions as F
@@ -378,7 +479,7 @@ spark.stop()
 
 ---
 
-## More Column & DataFrame Ops
+## More Column and DataFrame Ops
 
 ```python
 from pyspark.sql import functions as F
@@ -454,15 +555,56 @@ spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
 
 ---
 
-## Performance & Caching
+## Reading Query Plans (`explain`)
+
+`explain()` shows how Catalyst will actually run your query — use it to spot shuffles (`Exchange`), the chosen join strategy, scans, and whether filters/columns were pushed into the source.
+
+```python
+df.explain()                  # physical plan only (default)
+df.explain(True)              # ALL phases: parsed → analyzed → optimized → physical
+df.explain("formatted")       # physical plan, tree + per-node detail (most readable, 3.0+)
+df.explain("cost")            # optimized logical plan WITH row/size stats
+df.explain("extended")        # same as explain(True)
+```
+
+**The four plan phases** (`explain(True)` prints all of them — this *is* the Catalyst pipeline):
+
+| Phase | What it is |
+|---|---|
+| **Parsed Logical Plan** | Raw plan from your code/SQL — column/table names not yet resolved. |
+| **Analyzed Logical Plan** | Names + types resolved against the catalog (fails here on typos / missing cols). |
+| **Optimized Logical Plan** | Catalyst rules applied: predicate/projection pushdown, constant folding, filter reordering. |
+| **Physical Plan** | Executable operators chosen (join strategy, `Exchange` shuffles, scans). The one Spark runs. |
+
+**What to look for in the physical plan:**
+
+```text
+== Physical Plan ==
+*(2) BroadcastHashJoin ...        # ← join strategy actually used
++- *(2) Filter (age > 25)         # ← was the filter pushed down?
+   +- Exchange hashpartitioning   # ← a SHUFFLE — the expensive part
+      +- FileScan parquet ...
+            PushedFilters: [GreaterThan(age,25)]   # ← predicate pushdown working
+            DataFilters / PartitionFilters: [...]  # ← partition pruning working
+```
+- `Exchange` = a shuffle (network + disk). Fewer is better.
+- `*(n)` = **whole-stage codegen** — operators fused into one generated Java method (fast). Missing `*` = falling back to interpreted (e.g. some UDFs).
+- `BroadcastHashJoin` vs `SortMergeJoin` tells you which join algorithm Catalyst chose (see Join Strategies).
+- `PushedFilters` / `PartitionFilters` present = Spark reads less data at the source.
+
+---
+
+## Performance and Caching
 
 ```python
 df.cache()                    # persist in memory across actions (avoids recompute)
 df.persist()                  # like cache, with configurable storage level
 df.unpersist()                # release it
 
-df.explain()                  # inspect the physical plan (spot shuffles/scans)
-df.explain("formatted")       # more readable plan
+from pyspark import StorageLevel
+df.persist(StorageLevel.MEMORY_AND_DISK)   # spill to disk if it won't fit in RAM
+# levels: MEMORY_ONLY, MEMORY_AND_DISK (default for DataFrames), DISK_ONLY,
+#         MEMORY_ONLY_SER, MEMORY_AND_DISK_SER, *_2 (replicated to 2 nodes)
 
 # Broadcast a small table into a join — avoids the big shuffle
 from pyspark.sql.functions import broadcast
@@ -470,18 +612,55 @@ big.join(broadcast(small), "key")
 
 # Key runtime configs
 spark.conf.set("spark.sql.shuffle.partitions", 200)      # partitions after a shuffle (default 200)
-spark.conf.set("spark.sql.adaptive.enabled", True)       # AQE — on by default since 3.0
+spark.conf.set("spark.sql.adaptive.enabled", True)       # AQE — on by default since 3.2
 ```
 
-- **Adaptive Query Execution (AQE)** is on by default (3.0+): re-optimizes the plan at runtime — coalesces shuffle partitions, switches join strategies, and handles skew. Usually leave it on.
+### Repartition vs Coalesce
+```python
+df.repartition(200)                  # full shuffle; increase OR decrease; even sizes
+df.repartition("dept")               # hash-partition by column (co-locates keys)
+df.repartition(200, "dept")          # both count and key
+df.coalesce(10)                      # decrease only; NO shuffle (merges partitions) — may skew
+```
+- Use `coalesce` to shrink partition count cheaply before a write (e.g. avoid thousands of tiny files).
+- Use `repartition` to grow parallelism, rebalance skew, or pre-partition by a join/group key.
+
+### Handling Data Skew
+One hot key sends most rows to a single task — that straggler dominates the stage.
+```python
+# 1. Let AQE fix it (default on in 3.2+): detects + splits skewed partitions automatically.
+spark.conf.set("spark.sql.adaptive.skewJoin.enabled", True)
+
+# 2. Salting — spread a hot key across N buckets, then join on (key, salt) and aggregate up.
+from pyspark.sql import functions as F
+N = 16
+big  = big.withColumn("salt", (F.rand() * N).cast("int"))
+small = small.crossJoin(spark.range(N).withColumnRenamed("id", "salt"))
+big.join(small, ["key", "salt"])
+```
+
+### Bucketing (pre-shuffled tables)
+```python
+# Write data pre-hashed by a key so future joins/aggregations on it skip the shuffle.
+(df.write.bucketBy(50, "user_id").sortBy("user_id")
+   .mode("overwrite").saveAsTable("events_bucketed"))
+```
+Joining two tables bucketed the same way on the same key → no `Exchange`.
+
+### Optimization checklist
+- **Adaptive Query Execution (AQE)** — on by default since **3.2** (existed but *off* in 3.0/3.1). Re-optimizes at runtime: coalesces shuffle partitions, converts SMJ→BHJ once real sizes are known, and splits skewed joins. Usually leave it on.
 - **Broadcast join** when one side is small (< ~10 MB by default) — ships it to every executor, skipping the shuffle. AQE also triggers this automatically.
 - **`spark.sql.shuffle.partitions`** (default 200) governs partition count after shuffles — too high = many tiny tasks, too low = huge tasks. AQE auto-tunes it, but override for very small or very large jobs.
+- **Predicate pushdown** — `filter()`/`where()` early so Parquet/ORC/JDBC skip rows at the source. Verify with `PushedFilters` in `explain()`.
+- **Partition pruning** — filter on a `partitionBy` column and Spark reads only those directories (`PartitionFilters` in the plan). Dynamic partition pruning (3.0+) prunes based on a joined dimension.
+- **Column pruning** — `select()` only the columns you need; columnar formats then read fewer bytes.
 - **Cache** only when you reuse a DataFrame/RDD multiple times — caching once-used data wastes memory.
 - **Avoid `collect()`** on large data — it pulls everything to the driver and can OOM. Use `take(n)` / `show()`.
-- **Minimize shuffles**: `reduceByKey` beats `groupByKey`; filter early, select only needed columns (column pruning).
-- **Prefer DataFrames over RDDs** — the Catalyst optimizer + Tungsten give big speedups RDDs don't get.
-- **Parquet over CSV** for storage — columnar, compressed, carries schema, supports predicate pushdown.
-- Watch the **Spark UI** (`:4040`) to see the DAG, stages, and shuffle sizes.
+- **Minimize shuffles**: `reduceByKey` beats `groupByKey`; filter early, select only needed columns.
+- **Prefer DataFrames over RDDs** — the Catalyst optimizer + Tungsten (off-heap memory, whole-stage codegen) give big speedups RDDs don't get.
+- **Parquet/ORC over CSV/JSON** — columnar, compressed, carries schema, supports predicate pushdown and column pruning.
+- **Avoid Python UDFs** where a built-in `F.*` exists — UDFs break codegen and serialize row-by-row to Python; prefer `pandas_udf` if you must.
+- Watch the **Spark UI** (`:4040`) — DAG, stages, shuffle read/write sizes, and skewed/straggler tasks.
 
 ---
 

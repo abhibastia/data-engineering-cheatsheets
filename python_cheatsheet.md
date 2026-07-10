@@ -174,6 +174,17 @@ sorted(lst, key=len, reverse=True)
 lst.reverse()           # reverse in-place
 lst.copy()              # shallow copy
 
+# .sort() vs sorted() — the distinction that bites
+# .sort()  → list method; sorts IN-PLACE and returns None (only works on lists)
+# sorted() → built-in; returns a NEW list; accepts ANY iterable (tuple, set, str, dict...)
+nums = [3, 1, 2]
+nums.sort()                 # mutates: nums is now [1, 2, 3]
+result = nums.sort()        # PITFALL: result is None — .sort() returns nothing
+new = sorted(nums)          # fresh sorted list; original left untouched
+sorted((3, 1, 2))           # [1, 2, 3] — tuple in, list out
+sorted("dbca")              # ['a', 'b', 'c', 'd'] — string in, list out
+# Both take key= and reverse=; both are stable (equal elements keep original order).
+
 # Info methods
 lst.count(x)            # count occurrences
 lst.index(x)            # index of first occurrence

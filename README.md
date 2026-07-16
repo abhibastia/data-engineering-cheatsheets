@@ -10,6 +10,8 @@ Quick-reference cheatsheets for tools and technologies commonly used in data eng
 ├── airflow_cheatsheet.md
 ├── dbt_cheatsheet.md
 ├── docker_cheatsheet.md
+├── kafka_cheatsheet.md
+├── mongodb_cheatsheet.md
 ├── pandas_cheatsheet.md
 ├── python_cheatsheet.md
 ├── snowflake_cheatsheet.md
@@ -53,6 +55,8 @@ Quick-reference cheatsheets for tools and technologies commonly used in data eng
 | [Airflow](airflow_cheatsheet.md) | Workflow scheduling & orchestration |
 | [dbt](dbt_cheatsheet.md) | Data transformation & modeling |
 | [Docker](docker_cheatsheet.md) | Container build, run & compose |
+| [Kafka](kafka_cheatsheet.md) | Distributed event streaming — topics, partitions, consumers, Connect & ksqlDB |
+| [MongoDB](mongodb_cheatsheet.md) | Document NoSQL database — CRUD, indexing, aggregation & schema design |
 | [Pandas](pandas_cheatsheet.md) | DataFrame operations & data wrangling |
 | [Python](python_cheatsheet.md) | Python language essentials |
 | [Snowflake](snowflake_cheatsheet.md) | Cloud data warehouse |

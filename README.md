@@ -10,13 +10,16 @@ Quick-reference cheatsheets for tools and technologies commonly used in data eng
 ├── airflow_cheatsheet.md
 ├── dbt_cheatsheet.md
 ├── docker_cheatsheet.md
+├── github_actions_cheatsheet.md
 ├── kafka_cheatsheet.md
+├── kubernetes_cheatsheet.md
 ├── mongodb_cheatsheet.md
 ├── pandas_cheatsheet.md
 ├── python_cheatsheet.md
 ├── snowflake_cheatsheet.md
 ├── spark_cheatsheet.md
-└── sql_cheatsheet.md
+├── sql_cheatsheet.md
+└── terraform_cheatsheet.md
 ```
 
 ## Cheatsheets
@@ -55,10 +58,13 @@ Quick-reference cheatsheets for tools and technologies commonly used in data eng
 | [Airflow](airflow_cheatsheet.md) | Workflow scheduling & orchestration |
 | [dbt](dbt_cheatsheet.md) | Data transformation & modeling |
 | [Docker](docker_cheatsheet.md) | Container build, run & compose |
+| [GitHub Actions](github_actions_cheatsheet.md) | CI/CD workflows — jobs, secrets, reusable workflows & matrix strategy |
 | [Kafka](kafka_cheatsheet.md) | Distributed event streaming — topics, partitions, consumers, Connect & ksqlDB |
+| [Kubernetes](kubernetes_cheatsheet.md) | Container orchestration — Pods, Deployments, Services & Minikube |
 | [MongoDB](mongodb_cheatsheet.md) | Document NoSQL database — CRUD, indexing, aggregation & schema design |
 | [Pandas](pandas_cheatsheet.md) | DataFrame operations & data wrangling |
 | [Python](python_cheatsheet.md) | Python language essentials |
 | [Snowflake](snowflake_cheatsheet.md) | Cloud data warehouse |
 | [Spark (PySpark)](spark_cheatsheet.md) | Distributed batch processing — RDDs, DataFrames & Spark SQL |
 | [SQL](sql_cheatsheet.md) | SQL query reference |
+| [Terraform](terraform_cheatsheet.md) | Infrastructure as Code — providers, state, modules, backends & workspaces |
